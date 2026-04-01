@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown Interpreter</title>
+
+  <!-- Marked: GitHub-flavored markdown parser -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+
+  <!-- highlight.js for code blocks -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/common.min.js"></script>
+
+  <!-- html2pdf for PDF export -->
+  <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"></script>
+
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #79c0ff;
+      --btn-bg: #238636;
+      --btn-hover: #2ea043;
+      --drop-bg: rgba(88, 166, 255, 0.06);
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 16px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .btn-upload {
+      background: var(--surface);
+      color: var(--text);
+    }
+    .btn-upload:hover {
+      background: var(--border);
+    }
+
+    .btn-download {
+      background: var(--btn-bg);
+      color: #fff;
+      border-color: transparent;
+    }
+    .btn-download:hover {
+      background: var(--btn-hover);
+    }
+    .btn-download:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ── Main content area ── */
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+    }
+
+    /* ── Drop zone (initial state) ── */
+    .drop-zone {
+      width: 100%;
+      max-width: 640px;
+      min-height: 260px;
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 48px 24px;
+      transition: border-color 0.2s, background 0.2s;
+      text-align: center;
+    }
+
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: var(--drop-bg);
+    }
+
+    .drop-zone svg {
+      width: 48px;
+      height: 48px;
+      color: var(--text-muted);
+    }
+
+    .drop-zone p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    .drop-zone .hint {
+      font-size: 13px;
+    }
+
+    .drop-zone .or {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .drop-zone .browse-link {
+      color: var(--accent);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .drop-zone .browse-link:hover {
+      color: var(--accent-hover);
+    }
+
+    /* ── Paste editor ── */
+    .paste-zone {
+      width: 100%;
+      max-width: 880px;
+      display: none;
+    }
+
+    .paste-zone textarea {
+      width: 100%;
+      min-height: 400px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      resize: vertical;
+      outline: none;
+      tab-size: 4;
+    }
+
+    .paste-zone textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    .paste-zone textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .paste-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+    }
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+    .btn-primary:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ── Rendered markdown panel ── */
+    .render-panel {
+      width: 100%;
+      max-width: 880px;
+      display: none;                 /* shown after file load */
+    }
+
+    .file-info {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    .markdown-body {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 32px 40px;
+      line-height: 1.6;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    /* ─── GitHub-style markdown typography ─── */
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4,
+    .markdown-body h5,
+    .markdown-body h6 {
+      margin-top: 24px;
+      margin-bottom: 16px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--text);
+    }
+
+    .markdown-body h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+    .markdown-body h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+    .markdown-body h3 { font-size: 1.25em; }
+    .markdown-body h4 { font-size: 1em; }
+    .markdown-body h5 { font-size: 0.875em; }
+    .markdown-body h6 { font-size: 0.85em; color: var(--text-muted); }
+
+    .markdown-body p {
+      margin-top: 0;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .markdown-body a:hover {
+      text-decoration: underline;
+    }
+
+    .markdown-body strong { font-weight: 600; }
+
+    .markdown-body img {
+      max-width: 100%;
+      border-radius: 6px;
+    }
+
+    .markdown-body blockquote {
+      margin: 0 0 16px 0;
+      padding: 0 16px;
+      color: var(--text-muted);
+      border-left: 4px solid var(--border);
+    }
+
+    .markdown-body ul,
+    .markdown-body ol {
+      padding-left: 2em;
+      margin-top: 0;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body li + li {
+      margin-top: 4px;
+    }
+
+    .markdown-body input[type="checkbox"] {
+      margin-right: 6px;
+    }
+
+    .markdown-body hr {
+      border: 0;
+      height: 1px;
+      background: var(--border);
+      margin: 24px 0;
+    }
+
+    .markdown-body code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 85%;
+      background: rgba(110,118,129,0.2);
+      border-radius: 4px;
+      padding: 0.2em 0.4em;
+    }
+
+    .markdown-body pre {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      overflow-x: auto;
+      margin-top: 0;
+      margin-bottom: 16px;
+      line-height: 1.45;
+    }
+
+    .markdown-body pre code {
+      background: transparent;
+      padding: 0;
+      font-size: 85%;
+      border-radius: 0;
+    }
+
+    .markdown-body table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body table th,
+    .markdown-body table td {
+      border: 1px solid var(--border);
+      padding: 8px 13px;
+    }
+
+    .markdown-body table th {
+      font-weight: 600;
+      background: rgba(110,118,129,0.1);
+    }
+
+    .markdown-body table tr:nth-child(even) {
+      background: rgba(110,118,129,0.05);
+    }
+
+    /* ── PDF-specific overrides (applied during export) ── */
+    .pdf-export .markdown-body {
+      background: #ffffff;
+      color: #1f2328;
+      border: none;
+      padding: 0;
+    }
+    .pdf-export .markdown-body h1,
+    .pdf-export .markdown-body h2,
+    .pdf-export .markdown-body h3,
+    .pdf-export .markdown-body h4,
+    .pdf-export .markdown-body h5,
+    .pdf-export .markdown-body h6 {
+      color: #1f2328;
+    }
+    .pdf-export .markdown-body h1,
+    .pdf-export .markdown-body h2 {
+      border-bottom-color: #d1d9e0;
+    }
+    .pdf-export .markdown-body a { color: #0969da; }
+    .pdf-export .markdown-body blockquote {
+      color: #656d76;
+      border-left-color: #d1d9e0;
+    }
+    .pdf-export .markdown-body code {
+      background: rgba(175,184,193,0.2);
+    }
+    .pdf-export .markdown-body pre {
+      background: #f6f8fa;
+      border-color: #d1d9e0;
+    }
+    .pdf-export .markdown-body table th,
+    .pdf-export .markdown-body table td {
+      border-color: #d1d9e0;
+    }
+    .pdf-export .markdown-body table th {
+      background: #f6f8fa;
+    }
+    .pdf-export .markdown-body hr {
+      background: #d1d9e0;
+    }
+    .pdf-export .markdown-body h6 { color: #656d76; }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      .markdown-body { padding: 20px 16px; }
+      header { padding: 10px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hidden file input -->
+  <input type="file" id="fileInput" accept=".md,.markdown,.txt,.text,.mdx" hidden>
+
+  <header>
+    <h1>Markdown Interpreter</h1>
+    <div class="header-actions">
+      <button class="btn-upload" id="btnUpload" title="Open a markdown file">Open File</button>
+      <button class="btn-upload" id="btnPaste" title="Write or paste markdown text">Paste Markdown</button>
+      <button class="btn-upload" id="btnEdit" title="Edit the markdown source" style="display:none">Edit</button>
+      <button class="btn-download" id="btnDownload" title="Download as PDF" disabled>Download PDF</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Initial state: drop zone -->
+    <div class="drop-zone" id="dropZone">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0
+          0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m3.75 9v6m3-3H9m1.5-12H5.625c-.621
+          0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621
+          0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+      </svg>
+      <p>Drag &amp; drop a Markdown file here</p>
+      <p class="or">or</p>
+      <p><span class="browse-link" id="browseLink">Browse files</span></p>
+      <p class="or">or</p>
+      <p><span class="browse-link" id="pasteLink">Paste markdown text</span></p>
+      <p class="hint">Supports .md, .markdown, .txt, .mdx</p>
+    </div>
+
+    <!-- Paste / edit zone -->
+    <div class="paste-zone" id="pasteZone">
+      <textarea id="pasteInput" placeholder="Paste or type your markdown here..."></textarea>
+      <div class="paste-actions">
+        <button class="btn-secondary" id="btnPasteCancel">Cancel</button>
+        <button class="btn-primary" id="btnPasteRender" disabled>Render</button>
+      </div>
+    </div>
+
+    <!-- Rendered markdown (hidden until file loaded) -->
+    <div class="render-panel" id="renderPanel">
+      <div class="file-info" id="fileInfo"></div>
+      <div class="markdown-body" id="markdownBody"></div>
+    </div>
+  </main>
+
+  <script>
+    const fileInput    = document.getElementById('fileInput');
+    const dropZone     = document.getElementById('dropZone');
+    const browseLink   = document.getElementById('browseLink');
+    const pasteZone    = document.getElementById('pasteZone');
+    const pasteInput   = document.getElementById('pasteInput');
+    const btnPaste     = document.getElementById('btnPaste');
+    const btnPasteCancel  = document.getElementById('btnPasteCancel');
+    const btnPasteRender  = document.getElementById('btnPasteRender');
+    const btnEdit      = document.getElementById('btnEdit');
+    const renderPanel  = document.getElementById('renderPanel');
+    const markdownBody = document.getElementById('markdownBody');
+    const fileInfo     = document.getElementById('fileInfo');
+    const btnUpload    = document.getElementById('btnUpload');
+    const btnDownload  = document.getElementById('btnDownload');
+
+    let currentFileName = 'document';
+    let currentSource   = '';          // raw markdown for edit round-trips
+
+    // ── Configure marked ──
+    marked.setOptions({
+      gfm: true,
+      breaks: true,
+      highlight: function(code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          try { return hljs.highlight(code, { language: lang }).value; } catch (_) {}
+        }
+        try { return hljs.highlightAuto(code).value; } catch (_) {}
+        return code;
+      }
+    });
+
+    // ── File handling ──
+    function loadFile(file) {
+      if (!file) return;
+      currentFileName = file.name.replace(/\.[^.]+$/, '');
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const md = e.target.result;
+        renderMarkdown(md);
+      };
+      reader.readAsText(file);
+    }
+
+    function showView(view) {
+      dropZone.style.display    = view === 'drop'   ? 'flex' : 'none';
+      pasteZone.style.display   = view === 'paste'  ? 'block' : 'none';
+      renderPanel.style.display = view === 'render' ? 'block' : 'none';
+      btnEdit.style.display     = view === 'render' ? 'inline-block' : 'none';
+      btnPaste.style.display    = view === 'render' ? 'none' : 'inline-block';
+      if (view !== 'render') btnDownload.disabled = true;
+    }
+
+    function renderMarkdown(md) {
+      currentSource = md;
+      markdownBody.innerHTML = marked.parse(md);
+
+      // Apply highlight.js to any code blocks marked missed
+      markdownBody.querySelectorAll('pre code').forEach(block => {
+        hljs.highlightElement(block);
+      });
+
+      // Make checkboxes from task lists disabled (display only)
+      markdownBody.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.disabled = true;
+      });
+
+      showView('render');
+      fileInfo.textContent = currentFileName + '.md';
+      btnDownload.disabled = false;
+    }
+
+    // ── Triggers ──
+    browseLink.addEventListener('click', () => fileInput.click());
+    document.getElementById('pasteLink').addEventListener('click', () => {
+      pasteInput.value = '';
+      btnPasteRender.disabled = true;
+      showView('paste');
+      pasteInput.focus();
+    });
+    btnUpload.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length) loadFile(e.target.files[0]);
+    });
+
+    // ── Paste markdown flow ──
+    btnPaste.addEventListener('click', () => {
+      pasteInput.value = currentSource;
+      showView('paste');
+      pasteInput.focus();
+    });
+
+    pasteInput.addEventListener('input', () => {
+      btnPasteRender.disabled = pasteInput.value.trim().length === 0;
+    });
+
+    btnPasteRender.addEventListener('click', () => {
+      const md = pasteInput.value;
+      if (!md.trim()) return;
+      currentFileName = 'pasted-markdown';
+      renderMarkdown(md);
+    });
+
+    btnPasteCancel.addEventListener('click', () => {
+      // Go back: if we already have rendered content, show it; otherwise show drop zone
+      if (currentSource) {
+        showView('render');
+        btnDownload.disabled = false;
+      } else {
+        showView('drop');
+      }
+    });
+
+    // ── Edit button (back to paste editor with current source) ──
+    btnEdit.addEventListener('click', () => {
+      pasteInput.value = currentSource;
+      btnPasteRender.disabled = currentSource.trim().length === 0;
+      showView('paste');
+      pasteInput.focus();
+    });
+
+    // ── Drag & drop ──
+    ['dragenter', 'dragover'].forEach(evt =>
+      dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.add('drag-over');
+      })
+    );
+    ['dragleave', 'drop'].forEach(evt =>
+      dropZone.addEventListener(evt, () => dropZone.classList.remove('drag-over'))
+    );
+
+    // Allow drop on the whole window once render panel is visible
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) loadFile(file);
+    });
+
+    // ── PDF export ──
+    btnDownload.addEventListener('click', () => {
+      // Clone the rendered content so we can style it for PDF without affecting the page
+      const clone = markdownBody.cloneNode(true);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'pdf-export';
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+
+      // Apply PDF styles inline for the clone
+      clone.classList.add('markdown-body');
+
+      const opt = {
+        margin:      [12, 12, 12, 12],
+        filename:    currentFileName + '.pdf',
+        image:       { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak:   { mode: ['avoid-all', 'css', 'legacy'] }
+      };
+
+      html2pdf().set(opt).from(wrapper).save().then(() => {
+        document.body.removeChild(wrapper);
+      });
+    });
+  </script>
+</body>
+</html>
