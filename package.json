@@ -1,0 +1,22 @@
+{
+  "name": "markdown-interpreter",
+  "version": "1.0.0",
+  "description": "Lightweight markdown viewer and editor",
+  "scripts": {
+    "bundle": "esbuild renderer/renderer.js --bundle --platform=browser --outfile=renderer/bundle.js",
+    "dev": "npm run bundle && cargo tauri dev",
+    "build": "npm run bundle && cargo tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-cli": "^2.4.1",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "highlight.js": "^11.11.1",
+    "marked": "^15.0.7"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.28.0"
+  }
+}

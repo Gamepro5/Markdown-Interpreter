@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "default app permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "cli:default",
+    "cli:allow-cli-matches",
+    "shell:allow-open",
+    {
+      "identifier": "core:event:default",
+      "allow": [
+        { "event": "file-changed" },
+        { "event": "open-file-from-cli" },
+        { "event": "cli-has-file" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https: data:; script-src 'self' 'unsafe-eval';">
+  <title>Markdown Interpreter</title>
+  <link rel="icon" href="../assets/icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Loading screen -->
+  <div id="loading" class="hidden">
+    <div class="loading-inner">
+      <div class="spinner"></div>
+      <p id="loading-msg">Loading...</p>
+    </div>
+  </div>
+
+  <!-- Welcome screen -->
+  <div id="welcome" class="hidden">
+    <div class="welcome-inner">
+      <h1>Markdown Interpreter</h1>
+      <p>Open a markdown file to get started</p>
+      <button id="open-btn">Open File</button>
+      <p class="hint">or drag a file onto this window</p>
+      <p class="hint">Ctrl+O to open &middot; Ctrl+E to edit</p>
+    </div>
+  </div>
+
+  <!-- Main content area -->
+  <div id="app" class="hidden">
+    <div id="toolbar">
+      <span id="filename"></span>
+      <div id="toolbar-actions">
+        <button id="edit-toggle" title="Toggle edit mode (Ctrl+E)">Edit</button>
+        <button id="save-btn" class="hidden" title="Save (Ctrl+S)">Save</button>
+      </div>
+    </div>
+    <div id="content-wrapper">
+      <textarea id="editor" class="hidden" spellcheck="false"></textarea>
+      <div id="resize-handle" class="hidden"></div>
+      <div id="preview" class="markdown-body"></div>
+    </div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-panel">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="settings-close">&times;</button>
+      </div>
+
+      <div class="settings-body">
+        <div class="setting-group">
+          <label class="setting-label">Theme</label>
+          <div class="setting-row">
+            <select id="setting-theme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Startup window size</label>
+          <div class="setting-row">
+            <input type="number" id="setting-width" min="400" max="3840" step="10">
+            <span class="setting-x">&times;</span>
+            <input type="number" id="setting-height" min="300" max="2160" step="10">
+            <span class="setting-unit">px</span>
+            <button id="setting-size-reset" class="btn-small">Reset to default</button>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Full-width preview</label>
+          <div class="setting-row">
+            <label class="toggle-label">
+              <input type="checkbox" id="setting-full-width">
+              <span>Remove max-width constraint so text fills the entire window</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-footer">
+        <button id="settings-save" class="btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- About / Hotkeys overlay -->
+  <div id="about-overlay" class="hidden">
+    <div id="about-panel">
+      <div class="settings-header">
+        <h2 id="about-title">Keyboard Shortcuts</h2>
+        <button id="about-close">&times;</button>
+      </div>
+      <div class="settings-body" id="about-body"></div>
+    </div>
+  </div>
+
+  <script src="bundle.js"></script>
+</body>
+</html>
