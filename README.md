@@ -40,6 +40,10 @@ The release output is at:
 
 The installer registers the app as a handler for `.md`, `.markdown`, and `.mdx` files so you can set it as your default markdown viewer.
 
+## Running on Linux (Wayland)
+
+WebKitGTK's DMABUF renderer crashes on many Wayland compositors with `Error 71 (Protocol error) dispatching to Wayland display`. On Linux the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` automatically at startup, so no manual workaround is needed. You can still override it by exporting the variable yourself before launching.
+
 ## Features
 
 - **Instant preview** — opens and renders markdown files immediately

@@ -210,6 +210,16 @@ fn build_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMABUF renderer crashes on many Wayland compositors
+    // ("Error 71 (Protocol error) dispatching to Wayland display"). Disable it
+    // before any GTK/WebKit code initializes.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let initial_settings = load_settings();
     let win_w = initial_settings.window_width;
     let win_h = initial_settings.window_height;
