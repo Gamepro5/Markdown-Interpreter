@@ -42,7 +42,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "deb", "rpm", "appimage"],
+    "category": "Utility",
+    "shortDescription": "Lightweight markdown viewer and editor",
+    "longDescription": "Markdown Interpreter is a lightweight desktop app for viewing and editing markdown files with live preview.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -60,6 +63,17 @@
     "windows": {
       "webviewInstallMode": {
         "type": "skip"
+      }
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../assets/markdown-interpreter.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "../assets/markdown-interpreter.desktop"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   }
