@@ -43,6 +43,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "deb", "rpm", "appimage"],
+    "publisher": "Gamepro5",
+    "homepage": "https://github.com/Gamepro5/Markdown-Interpreter",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
     "category": "Utility",
     "shortDescription": "Lightweight markdown viewer and editor",
     "longDescription": "Markdown Interpreter is a lightweight desktop app for viewing and editing markdown files with live preview.",
