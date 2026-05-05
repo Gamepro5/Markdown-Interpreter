@@ -2,9 +2,10 @@ const { marked } = require('marked');
 const hljs = require('highlight.js');
 const { invoke } = require('@tauri-apps/api/core');
 const { listen } = require('@tauri-apps/api/event');
-const { open: openDialog } = require('@tauri-apps/plugin-dialog');
+const { open: openDialog, ask } = require('@tauri-apps/plugin-dialog');
 const { convertFileSrc } = require('@tauri-apps/api/core');
 const { open: shellOpen } = require('@tauri-apps/plugin-shell');
+const { getCurrentWindow } = require('@tauri-apps/api/window');
 
 // ── Configure marked ─────────────────────────────────────────────────────────
 
@@ -96,6 +97,21 @@ let isEditing = false;
 let isDirty = false;
 let appSettings = null;
 
+function updateTitle() {
+  const name = currentFilePath
+    ? currentFilePath.replace(/\\/g, '/').split('/').pop()
+    : '';
+  const base = name ? `${name} — Markdown Interpreter` : 'Markdown Interpreter';
+  const title = isDirty ? `(*) ${base}` : base;
+  getCurrentWindow().setTitle(title).catch(() => {});
+}
+
+function setDirty(value) {
+  if (isDirty === value) return;
+  isDirty = value;
+  updateTitle();
+}
+
 // ── Asset path resolution ────────────────────────────────────────────────────
 
 function resolveAssetPath(href) {
@@ -130,6 +146,7 @@ async function openFile(path) {
     const sep = currentFilePath.includes('\\') ? '\\' : '/';
     currentFileDir = currentFilePath.substring(0, currentFilePath.lastIndexOf(sep));
     isDirty = false;
+    updateTitle();
 
     showView('app');
     filenameEl.textContent = currentFilePath.replace(/\\/g, '/').split('/').pop();
@@ -179,7 +196,7 @@ async function saveFile() {
   currentContent = editorEl.value;
   try {
     await invoke('save_file', { path: currentFilePath, content: currentContent });
-    isDirty = false;
+    setDirty(false);
     renderMarkdown(currentContent);
   } catch (e) {
     console.error('Failed to save:', e);
@@ -189,7 +206,7 @@ async function saveFile() {
 // ── Editor input ─────────────────────────────────────────────────────────────
 
 editorEl.addEventListener('input', () => {
-  isDirty = true;
+  setDirty(editorEl.value !== currentContent);
   renderMarkdown(editorEl.value);
 });
 
@@ -424,6 +441,7 @@ document.addEventListener('drop', (e) => {
         currentFilePath = file.name;
         currentFileDir = '';
         isDirty = false;
+        updateTitle();
         showView('app');
         filenameEl.textContent = file.name;
         renderMarkdown(currentContent);
@@ -431,6 +449,26 @@ document.addEventListener('drop', (e) => {
       };
       reader.readAsText(file);
     }
+  }
+});
+
+// ── Close confirmation ───────────────────────────────────────────────────────
+
+getCurrentWindow().onCloseRequested(async (event) => {
+  if (!isDirty) return;
+  event.preventDefault();
+  const shouldClose = await ask(
+    'You have unsaved changes. Close without saving?',
+    {
+      title: 'Unsaved changes',
+      kind: 'warning',
+      okLabel: 'Close without saving',
+      cancelLabel: 'Cancel',
+    }
+  );
+  if (shouldClose) {
+    isDirty = false;
+    await getCurrentWindow().destroy();
   }
 });
 

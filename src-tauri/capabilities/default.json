@@ -5,7 +5,10 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-destroy",
     "dialog:default",
+    "dialog:allow-ask",
     "dialog:allow-open",
     "cli:default",
     "cli:allow-cli-matches",

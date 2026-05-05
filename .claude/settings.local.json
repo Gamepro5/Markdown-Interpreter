@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node scripts/generate-icon.js)"
+      "Bash(node scripts/generate-icon.js)",
+      "Bash(npm run *)"
     ]
   }
 }
