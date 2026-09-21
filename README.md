@@ -4,6 +4,23 @@ A lightweight, fast desktop app for viewing and editing markdown files. Built wi
 
 Double-click any `.md` file and the app opens it rendered, just like a preview pane in VS Code.
 
+## Download
+
+Installers for Windows and Linux are on the
+[releases page](https://github.com/Gamepro5/Markdown-Interpreter/releases):
+
+| file | for |
+|---|---|
+| `…-x86_64-setup.exe` | Windows — registers `.md`, `.markdown` and `.mdx` |
+| `…-x86_64.deb` | Debian, Ubuntu and derivatives |
+| `…-x86_64.rpm` | Fedora, RHEL, openSUSE |
+| `…-x86_64.AppImage` | any Linux — no install, mark it executable and run |
+
+The Linux packages are built on Ubuntu 22.04, so glibc 2.35 or newer is enough.
+`SHA256SUMS.txt` on the release lists every file's checksum.
+
+Or build it yourself; see [Building](#building).
+
 ## Dependencies
 
 **Runtime** (bundled):
@@ -39,6 +56,32 @@ The release output is at:
 - **Installer**: `src-tauri/target/release/bundle/nsis/Markdown Interpreter_1.0.0_x64-setup.exe`
 
 The installer registers the app as a handler for `.md`, `.markdown`, and `.mdx` files so you can set it as your default markdown viewer.
+
+### Building every platform
+
+`build_all.bat` builds Windows natively and hands the Linux half to WSL, which
+is the only way to do it on one machine: Tauri cannot cross-compile, because the
+Linux bundles link against webkit2gtk and the Windows one needs NSIS.
+
+For an actual release, push a tag and let GitHub build each platform on its own
+runner:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0          # .github/workflows/release.yml
+```
+
+That produces the `.exe`, `.deb`, `.rpm` and `.AppImage`, attaches them and a
+`SHA256SUMS.txt` to a **draft** release, and leaves the notes for you to edit
+before publishing. Publishing a release from the GitHub web UI works too — the
+installers are uploaded into it when the build finishes. The tag may be written
+`v1.0.0` or `1.0.0`, but it has to start with a digit or a `v`.
+
+**The version lives in three files** — `package.json`, `src-tauri/Cargo.toml`
+and `src-tauri/tauri.conf.json` — and Tauri stamps the installers from
+`tauri.conf.json`, not from the tag. A twenty-second preflight job refuses to
+build when they disagree with the tag, rather than shipping a release called
+v1.1.0 full of files that call themselves 1.0.0.
 
 ## Running on Linux (Wayland)
 

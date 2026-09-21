@@ -1,0 +1,232 @@
+name: Release
+
+# Builds the installers natively on each platform and attaches them to a
+# GitHub Release. Tauri cannot cross-compile — the Linux bundles need
+# webkit2gtk and the Windows one needs the NSIS toolchain — so each platform
+# gets its own runner, which is what build_all.bat does locally with WSL.
+#
+# Three ways in:
+#   - push a tag:            git tag v1.0.0 && git push origin v1.0.0
+#   - publish a release through the GitHub web UI
+#   - Actions -> Release -> Run workflow, against a tag that already exists
+#
+# Tag names are matched with and without the leading v. A tag matching neither
+# pattern silently does nothing, which is a miserable way to spend an evening.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+      - '[0-9]*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+# Tagging and then publishing a release from that tag fires twice. Let the
+# second run wait rather than race the first one's asset uploads.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Twenty seconds here saves finding out after a fifteen-minute build that
+  # every installer is stamped with the wrong version. Tauri takes the version
+  # from tauri.conf.json, not from the tag, so a mismatch ships a release
+  # called v1.1.0 full of files that call themselves 1.0.0.
+  preflight:
+    name: Check the version matches the tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that the tag exists
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${{ github.repository }}/git/ref/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::No tag '${{ inputs.tag }}' in ${{ github.repository }}. Create it first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }} — which also starts this workflow on its own."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Compare versions
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          conf=$(jq -r .version src-tauri/tauri.conf.json)
+          pkg=$(jq -r .version package.json)
+          crate=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+
+          echo "tag $tag -> $want | tauri.conf.json $conf | package.json $pkg | Cargo.toml $crate"
+          fail=0
+          for pair in "tauri.conf.json:$conf" "package.json:$pkg" "src-tauri/Cargo.toml:$crate"; do
+            file="${pair%%:*}"; have="${pair#*:}"
+            if [ "$have" != "$want" ]; then
+              echo "::error file=$file::$file says $have but the tag says $want. Update it, delete the tag, and push it again."
+              fail=1
+            fi
+          done
+          exit $fail
+
+  build:
+    name: ${{ matrix.target }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04, not -latest: it has glibc 2.35 and webkit2gtk-4.1,
+          # so the .deb and the AppImage also run on Ubuntu 22.04, Debian 12
+          # and anything newer. Building on 24.04 raises the floor for no gain.
+          - os: ubuntu-22.04
+            target: x86_64-linux
+          - os: windows-latest
+            target: x86_64-windows
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file pkg-config patchelf \
+            libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc -V && cargo -V
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.target }}-
+
+      - run: npm ci
+
+      # The npm-published CLI is a prebuilt binary, so this takes seconds where
+      # `cargo install tauri-cli` takes minutes compiling it from source. The
+      # package's own scripts call `cargo tauri`, which assumes it is already
+      # installed; on a fresh runner it is not.
+      #
+      # tauri.conf.json has a beforeBuildCommand of `npm run bundle`, so the
+      # esbuild step runs as part of this.
+      - name: Build the bundles
+        shell: bash
+        env:
+          # appimagetool wants FUSE, which a runner does not have. Extracting
+          # and running it directly is the supported way out.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: npx --yes '@tauri-apps/cli@^2' build --verbose
+
+      - name: Collect the installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag || github.ref_name }}"
+          out="dist"
+          mkdir -p "$out"
+          bundle="src-tauri/target/release/bundle"
+
+          # Tauri names its output after the product name, which has a space in
+          # it, and GitHub turns spaces in asset names into dots. Rename to
+          # something predictable that a download link can be typed by hand.
+          copy() {
+            local src="$1" ext="$2"
+            [ -f "$src" ] || return 0
+            cp "$src" "$out/Markdown-Interpreter-${version}-x86_64.${ext}"
+            echo "  $(basename "$src")  ->  Markdown-Interpreter-${version}-x86_64.${ext}"
+          }
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # -setup so it is obvious this is an installer, not the app itself.
+            for f in "$bundle"/nsis/*-setup.exe; do
+              [ -f "$f" ] || continue
+              cp "$f" "$out/Markdown-Interpreter-${version}-x86_64-setup.exe"
+              echo "  $(basename "$f")"
+            done
+          else
+            for f in "$bundle"/deb/*.deb; do copy "$f" deb; done
+            for f in "$bundle"/rpm/*.rpm; do copy "$f" rpm; done
+            for f in "$bundle"/appimage/*.AppImage; do copy "$f" AppImage; done
+          fi
+
+          echo "Collected:"
+          ls -l "$out"
+          # An empty dist means the bundler changed its output paths and this
+          # step quietly copied nothing, which must not reach a release.
+          [ -n "$(ls -A "$out")" ] || { echo "::error::No installers were produced. Look at the bundle step's output for where they went."; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum Markdown-Interpreter-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Always a draft: a release is public the moment it exists, and a bad
+      # installer cannot be unpublished from the people who already have it.
+      # Check the files, edit the notes, then press Publish.
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "Markdown Interpreter $TAG" \
+              --generate-notes \
+              --draft
+          fi
