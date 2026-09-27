@@ -6,6 +6,8 @@ const { open: openDialog, ask } = require('@tauri-apps/plugin-dialog');
 const { convertFileSrc } = require('@tauri-apps/api/core');
 const { open: shellOpen } = require('@tauri-apps/plugin-shell');
 const { getCurrentWindow } = require('@tauri-apps/api/window');
+const { getCurrentWebview } = require('@tauri-apps/api/webview');
+const { getVersion } = require('@tauri-apps/api/app');
 
 // ── Configure marked ─────────────────────────────────────────────────────────
 
@@ -81,6 +83,13 @@ const settingWidth    = document.getElementById('setting-width');
 const settingHeight   = document.getElementById('setting-height');
 const settingSizeReset = document.getElementById('setting-size-reset');
 const settingFullWidth = document.getElementById('setting-full-width');
+const settingCheckUpdates = document.getElementById('setting-check-updates');
+const settingAutoUpdate   = document.getElementById('setting-auto-update');
+
+// Update notice
+const updateBanner  = document.getElementById('update-banner');
+const updateText    = document.getElementById('update-text');
+const updateActions = document.getElementById('update-actions');
 
 // About
 const aboutOverlay = document.getElementById('about-overlay');
@@ -116,10 +125,23 @@ function setDirty(value) {
 
 function resolveAssetPath(href) {
   if (!href) return href;
-  if (/^(https?:|data:|asset:)/i.test(href)) return href;
+  if (/^(https?:|data:|asset:|blob:)/i.test(href)) return href;
+
+  // marked percent-encodes the destination, so `my pic.png` arrives as
+  // `my%20pic.png`. Undo that before treating it as a path on disk.
+  let path = href;
+  try { path = decodeURI(href); } catch (_) { /* leave it as written */ }
+  if (/^file:\/\//i.test(path)) {
+    path = path.replace(/^file:\/\//i, '').replace(/^\/([a-z]:)/i, '$1');
+  }
+
+  // Absolute paths, as inserted for images dropped from outside the file's folder.
+  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith('/') || path.startsWith('\\\\')) {
+    return convertFileSrc(path);
+  }
   if (currentFileDir) {
     const sep = currentFileDir.includes('\\') ? '\\' : '/';
-    const absPath = currentFileDir + sep + href.replace(/\//g, sep);
+    const absPath = currentFileDir + sep + path.replace(/[\\/]/g, sep);
     return convertFileSrc(absPath);
   }
   return href;
@@ -326,6 +348,8 @@ function openSettings() {
   settingWidth.value = appSettings.window_width;
   settingHeight.value = appSettings.window_height;
   settingFullWidth.checked = appSettings.full_width;
+  settingCheckUpdates.checked = appSettings.check_updates;
+  settingAutoUpdate.checked = appSettings.auto_update;
   settingsOverlay.classList.remove('hidden');
 }
 
@@ -346,6 +370,8 @@ settingsSave.addEventListener('click', async () => {
   appSettings.window_width = parseInt(settingWidth.value, 10) || 900;
   appSettings.window_height = parseInt(settingHeight.value, 10) || 700;
   appSettings.full_width = settingFullWidth.checked;
+  appSettings.check_updates = settingCheckUpdates.checked;
+  appSettings.auto_update = settingAutoUpdate.checked;
 
   applyTheme(appSettings.theme);
   applyFullWidth(appSettings.full_width);
@@ -374,10 +400,11 @@ function showHotkeys() {
   aboutOverlay.classList.remove('hidden');
 }
 
-function showAbout() {
+async function showAbout() {
+  const version = await getVersion().catch(() => '');
   aboutTitle.textContent = 'About';
   aboutBody.innerHTML = `
-    <p>Markdown Interpreter v1.0.0</p>
+    <p>Markdown Interpreter v${version}</p>
     <p class="about-version">A lightweight, fast desktop app for viewing and editing markdown files.</p>
     <p class="about-version">Built with Tauri + marked.js + highlight.js</p>
   `;
@@ -398,6 +425,127 @@ listen('menu-zoom-out', () => zoomOut());
 listen('menu-zoom-reset', () => zoomReset());
 listen('menu-about-hotkeys', () => showHotkeys());
 listen('menu-about-app', () => showAbout());
+listen('menu-check-updates', () => checkForUpdate(true));
+
+// ── Updates ──────────────────────────────────────────────────────────────────
+
+let pendingUpdate = null;
+let updateBusy = false;
+
+function esc(text) {
+  return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+function formatBytes(n) {
+  if (!n) return '';
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+}
+
+// Show the notice. `actions` is a list of [label, handler, primary?].
+function showUpdateBanner(html, actions = [], isError = false) {
+  updateText.innerHTML = html;
+  updateActions.replaceChildren();
+  for (const [label, handler, primary] of actions) {
+    const el = document.createElement(primary ? 'button' : 'a');
+    if (primary) el.className = 'btn-primary';
+    el.textContent = label;
+    el.addEventListener('click', handler);
+    updateActions.appendChild(el);
+  }
+  updateBanner.classList.toggle('error', isError);
+  updateBanner.classList.remove('hidden');
+}
+
+function hideUpdateBanner() {
+  updateBanner.classList.add('hidden');
+}
+
+// `manual` is the menu item: it says "up to date" and shows errors. The
+// startup check stays quiet about both — no network is not worth a popup.
+async function checkForUpdate(manual) {
+  if (updateBusy) return;
+  if (manual) showUpdateBanner('Checking for updates…');
+  let info;
+  try {
+    info = await invoke('check_for_update');
+  } catch (e) {
+    if (manual) showUpdateBanner(`Could not check for updates: ${esc(e)}`, [['Close', hideUpdateBanner]], true);
+    return;
+  }
+  if (!info) {
+    if (manual) {
+      const version = await getVersion().catch(() => '');
+      showUpdateBanner(`You have the latest version (${esc(version)}).`, [['Close', hideUpdateBanner]]);
+    }
+    return;
+  }
+  pendingUpdate = info;
+
+  if (!manual && appSettings.auto_update && info.can_install) {
+    installUpdate(false);
+    return;
+  }
+  offerUpdate(info);
+}
+
+function offerUpdate(info) {
+  const text = `<strong>Markdown Interpreter ${esc(info.version)}</strong> is available <span class="muted">— you have ${esc(info.current)}.</span>`;
+  const whatsNew = ['What’s new', () => shellOpen(info.web_url)];
+  const notNow = ['Not now', hideUpdateBanner];
+  if (info.can_install) {
+    const size = formatBytes(info.size);
+    showUpdateBanner(text, [
+      notNow,
+      whatsNew,
+      [size ? `Update now (${size})` : 'Update now', () => installUpdate(true), true],
+    ]);
+  } else {
+    // .deb / .rpm installs belong to the package manager.
+    showUpdateBanner(text, [notNow, ['Download', () => shellOpen(info.web_url), true]]);
+  }
+}
+
+// `now` installs immediately (on Windows the app closes and reopens); otherwise
+// it is prepared in the background and installed when the app is closed.
+async function installUpdate(now) {
+  if (updateBusy || !pendingUpdate) return;
+  if (now && pendingUpdate.restarts && isDirty) {
+    const save = await ask(
+      'Updating restarts Markdown Interpreter. Save your changes first?',
+      { title: 'Unsaved changes', kind: 'warning', okLabel: 'Save and update', cancelLabel: 'Cancel' }
+    );
+    if (!save) return;
+    await saveFile();
+    if (isDirty) return; // the save failed
+  }
+
+  updateBusy = true;
+  const version = esc(pendingUpdate.version);
+  if (now) showUpdateBanner(`Downloading Markdown Interpreter ${version}…`);
+  try {
+    const result = await invoke('install_update', { now });
+    if (result === 'on-exit') {
+      showUpdateBanner(
+        `Markdown Interpreter ${version} is ready <span class="muted">— it will be installed when you close the app.</span>`,
+        [['OK', hideUpdateBanner]]
+      );
+    } else if (result === 'replaced') {
+      showUpdateBanner(
+        `Updated to Markdown Interpreter ${version} <span class="muted">— restart the app to use it.</span>`,
+        [['OK', hideUpdateBanner]]
+      );
+    }
+    // 'restarting': the app is already closing.
+  } catch (e) {
+    showUpdateBanner(
+      `Update failed: ${esc(e)} <span class="muted">Nothing was changed.</span>`,
+      [['Close', hideUpdateBanner], ['Release page', () => shellOpen(pendingUpdate.web_url)]],
+      true
+    );
+  } finally {
+    updateBusy = false;
+  }
+}
 
 // ── Tauri events ─────────────────────────────────────────────────────────────
 
@@ -410,45 +558,72 @@ listen('file-changed', (event) => {
 
 // ── Drag & drop ──────────────────────────────────────────────────────────────
 
-let dragCounter = 0;
+// Files dropped from the desktop arrive through Tauri with their full paths —
+// the webview's own drop event never sees them. Markdown files are opened;
+// images are written into the editor as markdown image links.
 
-document.addEventListener('dragenter', (e) => {
-  e.preventDefault();
-  dragCounter++;
-  document.body.classList.add('drag-over');
-});
+const MARKDOWN_EXT = /\.(md|markdown|mdx|txt)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif|apng|tiff?)$/i;
 
-document.addEventListener('dragleave', (e) => {
-  e.preventDefault();
-  dragCounter--;
-  if (dragCounter <= 0) { dragCounter = 0; document.body.classList.remove('drag-over'); }
-});
+// Relative to the open file when the image sits in its folder (or below), so
+// the markdown still works if the folder is moved or shared; absolute otherwise.
+function imageMarkdown(absPath) {
+  const path = absPath.replace(/\\/g, '/');
+  let dest = path;
+  if (currentFileDir) {
+    // Rust canonicalizes the open file's path, which on Windows adds \\?\.
+    const dir = currentFileDir.replace(/^\\\\\?\\/, '').replace(/\\/g, '/').replace(/\/?$/, '/');
+    const windows = /^[a-z]:\//i.test(dir);
+    const inside = windows
+      ? path.toLowerCase().startsWith(dir.toLowerCase())
+      : path.startsWith(dir);
+    if (inside) dest = path.slice(dir.length);
+  }
+  // Angle brackets let a destination hold spaces and parentheses.
+  if (/[\s()]/.test(dest)) dest = `<${dest}>`;
+  const name = path.split('/').pop();
+  const alt = name.replace(/\.[^.]+$/, '').replace(/[[\]]/g, '');
+  return `![${alt}](${dest})`;
+}
 
-document.addEventListener('dragover', (e) => e.preventDefault());
+function insertImages(paths) {
+  if (!isEditing) {
+    // Dropped onto the preview: there is no caret to aim for, so append.
+    toggleEdit();
+    editorEl.selectionStart = editorEl.selectionEnd = editorEl.value.length;
+  }
+  editorEl.focus();
+  const start = editorEl.selectionStart;
+  const before = editorEl.value.substring(0, start);
+  let text = paths.map(imageMarkdown).join('\n');
+  if (before && !before.endsWith('\n')) text = '\n' + text;
+  // execCommand keeps the insertion on the textarea's undo stack (Ctrl+Z) and
+  // fires `input`, which re-renders and marks the file dirty.
+  if (!document.execCommand('insertText', false, text)) {
+    editorEl.setRangeText(text, start, editorEl.selectionEnd, 'end');
+    editorEl.dispatchEvent(new Event('input'));
+  }
+}
 
-document.addEventListener('drop', (e) => {
-  e.preventDefault();
-  dragCounter = 0;
-  document.body.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file && /\.(md|markdown|mdx|txt)$/i.test(file.name)) {
-    if (file.path) {
-      openFile(file.path);
-    } else {
-      const reader = new FileReader();
-      reader.onload = () => {
-        currentContent = reader.result;
-        currentFilePath = file.name;
-        currentFileDir = '';
-        isDirty = false;
-        updateTitle();
-        showView('app');
-        filenameEl.textContent = file.name;
-        renderMarkdown(currentContent);
-        editorEl.value = currentContent;
-      };
-      reader.readAsText(file);
+getCurrentWebview().onDragDropEvent(({ payload }) => {
+  const body = document.body;
+  if (payload.type === 'enter') {
+    const paths = payload.paths || [];
+    const images = currentFilePath && paths.some((p) => IMAGE_EXT.test(p));
+    body.classList.toggle('drag-image', !!images);
+    body.classList.add('drag-over');
+  } else if (payload.type === 'leave') {
+    body.classList.remove('drag-over', 'drag-image');
+  } else if (payload.type === 'drop') {
+    body.classList.remove('drag-over', 'drag-image');
+    const paths = payload.paths || [];
+    const images = paths.filter((p) => IMAGE_EXT.test(p));
+    if (images.length && currentFilePath) {
+      insertImages(images);
+      return;
     }
+    const md = paths.find((p) => MARKDOWN_EXT.test(p));
+    if (md) openFile(md);
   }
 });
 
@@ -490,4 +665,6 @@ contentWrapper.classList.add('preview-only');
   } else {
     showView('welcome');
   }
+
+  if (appSettings.check_updates) checkForUpdate(false);
 })();

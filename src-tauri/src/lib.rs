@@ -1,10 +1,12 @@
+mod updater;
+
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_cli::CliExt;
 
 // ── Settings ─────────────────────────────────────────────────────────────────
@@ -15,6 +17,16 @@ pub struct Settings {
     pub window_height: u32,
     pub theme: String,
     pub full_width: bool,
+    // Defaulted so a settings.json written before these existed still loads,
+    // rather than failing to parse and resetting everything.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+    #[serde(default)]
+    pub auto_update: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -24,6 +36,8 @@ impl Default for Settings {
             window_height: 700,
             theme: "dark".to_string(),
             full_width: false,
+            check_updates: true,
+            auto_update: false,
         }
     }
 }
@@ -59,6 +73,10 @@ struct AppState {
     watcher: Mutex<Option<RecommendedWatcher>>,
     cli_file: Mutex<Option<String>>,
     settings: Mutex<Settings>,
+    /// The newer release the last check found.
+    update: Mutex<Option<updater::Available>>,
+    /// A verified installer to run silently once the app has closed.
+    install_on_exit: Mutex<Option<PathBuf>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -158,6 +176,55 @@ fn save_settings(settings: Settings, state: State<AppState>, app: AppHandle) -> 
     Ok(())
 }
 
+// ── Updates ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<updater::UpdateInfo>, String> {
+    let current = app.package_info().version.to_string();
+    let query = current.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || updater::check(&query))
+        .await
+        .map_err(|e| e.to_string())??;
+    let info = found.as_ref().map(|a| a.info(&current));
+    *app.state::<AppState>().update.lock().unwrap() = found;
+    Ok(info)
+}
+
+/// Download, verify and apply the update the last check found.
+///
+/// `now` runs the Windows installer straight away and closes the app, which
+/// the installer then relaunches. Otherwise the installer waits for the app to
+/// be closed and runs silently. Returns `"restarting"`, `"on-exit"` or
+/// `"replaced"` (AppImage: the next launch is the new version).
+#[tauri::command]
+async fn install_update(now: bool, app: AppHandle) -> Result<String, String> {
+    let available = app
+        .state::<AppState>()
+        .update
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("no update has been found to install")?;
+    let prepared = tauri::async_runtime::spawn_blocking(move || updater::prepare(&available))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    match prepared {
+        updater::Prepared::Replaced => Ok("replaced".into()),
+        updater::Prepared::Installer(path) if now => {
+            updater::run_installer(&path, true)?;
+            // The installer closes a running copy itself, but leaving first is
+            // tidier than being killed.
+            app.exit(0);
+            Ok("restarting".into())
+        }
+        updater::Prepared::Installer(path) => {
+            *app.state::<AppState>().install_on_exit.lock().unwrap() = Some(path);
+            Ok("on-exit".into())
+        }
+    }
+}
+
 // ── Menu ─────────────────────────────────────────────────────────────────────
 
 fn build_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -197,6 +264,7 @@ fn build_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .item(
             &SubmenuBuilder::new(app, "About")
                 .item(&MenuItemBuilder::with_id("about-hotkeys", "Keyboard Shortcuts").build(app)?)
+                .item(&MenuItemBuilder::with_id("check-updates", "Check for Updates...").build(app)?)
                 .item(&MenuItemBuilder::with_id("about-app", "About Markdown Interpreter").build(app)?)
                 .build()?,
         )
@@ -220,6 +288,9 @@ pub fn run() {
         }
     }
 
+    // Installers from an earlier update have finished with their files.
+    updater::cleanup();
+
     let initial_settings = load_settings();
     let win_w = initial_settings.window_width;
     let win_h = initial_settings.window_height;
@@ -233,6 +304,8 @@ pub fn run() {
             watcher: Mutex::new(None),
             cli_file: Mutex::new(None),
             settings: Mutex::new(initial_settings),
+            update: Mutex::new(None),
+            install_on_exit: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             read_file,
@@ -242,6 +315,8 @@ pub fn run() {
             get_cli_file,
             get_settings,
             save_settings,
+            check_for_update,
+            install_update,
         ])
         .setup(move |app| {
             // Build native menu
@@ -282,6 +357,7 @@ pub fn run() {
                         }
                     }
                     "about-hotkeys" => { let _ = app_handle.emit("menu-about-hotkeys", ()); }
+                    "check-updates" => { let _ = app_handle.emit("menu-check-updates", ()); }
                     "about-app" => { let _ = app_handle.emit("menu-about-app", ()); }
                     _ => {}
                 }
@@ -289,6 +365,15 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // An automatic update waits for the app to close, so it never
+            // interrupts anyone mid-edit.
+            if let RunEvent::Exit = event {
+                if let Some(path) = app.state::<AppState>().install_on_exit.lock().unwrap().take() {
+                    let _ = updater::run_installer(&path, false);
+                }
+            }
+        });
 }

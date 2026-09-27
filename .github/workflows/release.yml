@@ -5,13 +5,20 @@ name: Release
 # webkit2gtk and the Windows one needs the NSIS toolchain — so each platform
 # gets its own runner, which is what build_all.bat does locally with WSL.
 #
-# Three ways in:
-#   - push a tag:            git tag v1.0.0 && git push origin v1.0.0
+# Three ways in, because all three are things a person actually does:
+#   - Actions -> Release -> Run workflow, and leave the box empty. The last
+#     released version gets its patch number bumped, the tag is made for you,
+#     and the commit you ran it from is what ships. Nothing to type, nothing
+#     to bump, nothing to commit first.
+#   - push a tag:            git tag v1.0.1 && git push origin v1.0.1
 #   - publish a release through the GitHub web UI
-#   - Actions -> Release -> Run workflow, against a tag that already exists
 #
 # Tag names are matched with and without the leading v. A tag matching neither
 # pattern silently does nothing, which is a miserable way to spend an evening.
+#
+# Whichever way in, the tag is the version: it is stamped over the version in
+# tauri.conf.json, package.json and Cargo.toml in the runner's checkout, so
+# they cannot disagree and no commit is needed to keep them in step.
 
 on:
   push:
@@ -23,8 +30,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build and publish (e.g. v1.0.0)'
-        required: true
+        description: 'Version to release. Leave blank to bump the last one.'
+        required: false
 
 permissions:
   contents: write
@@ -39,51 +46,55 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Twenty seconds here saves finding out after a fifteen-minute build that
-  # every installer is stamped with the wrong version. Tauri takes the version
-  # from tauri.conf.json, not from the tag, so a mismatch ships a release
-  # called v1.1.0 full of files that call themselves 1.0.0.
-  preflight:
-    name: Check the version matches the tag
+  # Decide what this release is called, and make sure a tag by that name
+  # exists on the commit being released.
+  #
+  # Leaving the box blank takes the last released version and adds one to its
+  # patch number. The only thing that has to be true of a version is that it is
+  # higher than the last one, because that is all the in-app updater compares.
+  version:
+    name: Version
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
     steps:
-      - name: Check that the tag exists
-        if: github.event_name == 'workflow_dispatch'
+      - uses: actions/checkout@v5
+
+      - id: pick
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh api "repos/${{ github.repository }}/git/ref/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
-            echo "::error::No tag '${{ inputs.tag }}' in ${{ github.repository }}. Create it first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }} — which also starts this workflow on its own."
-            exit 1
+          set -euo pipefail
+
+          # A tag push or a published release already names itself.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "releasing ${{ github.ref_name }} (named by the trigger)"
+            exit 0
           fi
 
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
+          asked="${{ inputs.tag }}"
+          if [ -n "$asked" ]; then
+            tag="$asked"
+          else
+            # Newest release, or 0.0.0 if this is the first.
+            last=$(gh release list --limit 1 --json tagName \
+                     --jq '.[0].tagName // "0.0.0"' 2>/dev/null || echo "0.0.0")
+            tag=$(echo "${last#v}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+            echo "last release was '${last}', so this one is '${tag}'"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Compare versions
-        run: |
-          set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          want="${tag#v}"
-          conf=$(jq -r .version src-tauri/tauri.conf.json)
-          pkg=$(jq -r .version package.json)
-          crate=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-
-          echo "tag $tag -> $want | tauri.conf.json $conf | package.json $pkg | Cargo.toml $crate"
-          fail=0
-          for pair in "tauri.conf.json:$conf" "package.json:$pkg" "src-tauri/Cargo.toml:$crate"; do
-            file="${pair%%:*}"; have="${pair#*:}"
-            if [ "$have" != "$want" ]; then
-              echo "::error file=$file::$file says $have but the tag says $want. Update it, delete the tag, and push it again."
-              fail=1
-            fi
-          done
-          exit $fail
+          # Point the tag at the commit this run was started from. `--force`
+          # so a release that failed to build can be retried on a newer commit
+          # under the same name, which is the common case after a fix.
+          git tag --force "$tag" "${{ github.sha }}"
+          git push --force origin "refs/tags/$tag"
+          echo "tagged ${{ github.sha }} as $tag"
 
   build:
+    needs: version
     name: ${{ matrix.target }}
-    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -100,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.version.outputs.tag }}
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -122,6 +133,66 @@ jobs:
           rustup default stable
           rustc -V && cargo -V
 
+      # The tag *is* the version.
+      #
+      # The in-app updater decides whether it is out of date by comparing its
+      # own version against the newest published tag. If the two disagree,
+      # every install believes it is behind for ever and offers the same update
+      # on every launch — so rather than checking they match, one is derived
+      # from the other. Nothing is committed back; the stamp lives only in the
+      # runner's checkout.
+      - name: Stamp the version from the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.version.outputs.tag }}"
+          # v1.2 and 1.2 are the same tag; 1.2 and 1.2.0 are the same version.
+          # Tauri stamps the installers from tauri.conf.json and wants x.y.z.
+          version=$(echo "${tag#v}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')
+
+          # JSON through node, which is on every runner once setup-node has run,
+          # rather than trusting sed with nested objects.
+          VERSION="$version" node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            const edit = (file, fn) => {
+              const json = JSON.parse(fs.readFileSync(file, "utf8"));
+              fn(json);
+              fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
+            };
+            edit("src-tauri/tauri.conf.json", (j) => { j.version = v; });
+            edit("package.json", (j) => { j.version = v; });
+            edit("package-lock.json", (j) => {
+              j.version = v;
+              if (j.packages && j.packages[""]) j.packages[""].version = v;
+            });
+          '
+
+          # Only the first `version = "…"`, which is [package]'s. A plain global
+          # replace would rewrite every dependency pin below it.
+          sed -i '0,/^version = ".*"/s//version = "'"$version"'"/' src-tauri/Cargo.toml
+
+          # Cargo.lock records the crate's own version too. Edited as text, as
+          # cargo would need the registry index to re-resolve it.
+          awk -v v="$version" '
+            /^name = "markdown-interpreter"$/ { print; want = 1; next }
+            want && /^version = "/             { print "version = \"" v "\""; want = 0; next }
+                                               { print }
+          ' src-tauri/Cargo.lock > src-tauri/Cargo.lock.stamped
+          mv src-tauri/Cargo.lock.stamped src-tauri/Cargo.lock
+
+          # Confirm every file landed. A silent miss ships installers that call
+          # themselves the wrong version, and an updater that never settles.
+          conf=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+          pkg=$(node -p 'require("./package.json").version')
+          crate=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          lock=$(awk '/^name = "markdown-interpreter"$/ { getline; print }' src-tauri/Cargo.lock)
+          echo "tag $tag -> $version | tauri.conf.json $conf | package.json $pkg | Cargo.toml $crate | Cargo.lock $lock"
+          for have in "$conf" "$pkg" "$crate"; do
+            [ "$have" = "$version" ] || { echo "::error::Version stamping missed a file (see the line above)."; exit 1; }
+          done
+          [ "$lock" = "version = \"$version\"" ] || { echo "::error::Version stamping missed Cargo.lock."; exit 1; }
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -136,9 +207,7 @@ jobs:
       - run: npm ci
 
       # The npm-published CLI is a prebuilt binary, so this takes seconds where
-      # `cargo install tauri-cli` takes minutes compiling it from source. The
-      # package's own scripts call `cargo tauri`, which assumes it is already
-      # installed; on a fresh runner it is not.
+      # `cargo install tauri-cli` takes minutes compiling it from source.
       #
       # tauri.conf.json has a beforeBuildCommand of `npm run bundle`, so the
       # esbuild step runs as part of this.
@@ -154,14 +223,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ inputs.tag || github.ref_name }}"
+          version="${{ needs.version.outputs.tag }}"
           out="dist"
           mkdir -p "$out"
           bundle="src-tauri/target/release/bundle"
 
           # Tauri names its output after the product name, which has a space in
           # it, and GitHub turns spaces in asset names into dots. Rename to
-          # something predictable that a download link can be typed by hand.
+          # something predictable. The in-app updater finds its file by these
+          # suffixes (-x86_64-setup.exe, -x86_64.AppImage), so keep them.
           copy() {
             local src="$1" ext="$2"
             [ -f "$src" ] || return 0
@@ -196,18 +266,20 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.version.outputs.tag }}
 
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      # The in-app updater checks every download against this file as well as
+      # against the digest GitHub publishes for each asset.
       - name: Checksums
         run: |
           cd dist
@@ -216,17 +288,22 @@ jobs:
 
       # Always a draft: a release is public the moment it exists, and a bad
       # installer cannot be unpublished from the people who already have it.
-      # Check the files, edit the notes, then press Publish.
+      # The in-app updater ignores drafts, so nobody is offered this until it
+      # is published. Check the files, edit the notes, then press Publish.
       - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
+            # Title is just the version: the repo name is already all over the
+            # page. NOTE the comment sits above the command - a comment after a
+            # "\" continuation swallows it, and the command then runs without
+            # the arguments that followed.
             gh release create "$TAG" dist/* \
-              --title "Markdown Interpreter $TAG" \
+              --title "$TAG" \
               --generate-notes \
               --draft
           fi

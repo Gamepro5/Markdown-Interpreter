@@ -420,6 +420,7 @@ html, body {
   align-items: center;
   gap: 8px;
 }
+.setting-row + .setting-row { margin-top: 8px; }
 .setting-x { color: var(--text-muted); font-size: 13px; }
 .setting-unit { color: var(--text-muted); font-size: 12px; }
 .setting-row input[type="number"] {
@@ -518,7 +519,36 @@ body.full-width #content-wrapper.preview-only #preview {
   max-width: none;
 }
 
+/* ── Update notice ────────────────────────────────────────────────────────── */
+/* Floating rather than a strip across the top, so it never shifts the layout. */
+#update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(460px, calc(100vw - 32px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  font-size: 13px;
+  z-index: 9000;
+}
+#update-banner.error { border-left-color: var(--red); }
+#update-text { flex: 1 1 200px; color: var(--text); }
+#update-text .muted { color: var(--text-muted); }
+#update-actions { display: flex; align-items: center; gap: 8px; }
+#update-actions a { color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: none; }
+#update-actions a:hover { text-decoration: underline; }
+#update-actions .btn-primary { padding: 4px 14px; }
+
 /* ── Drag-over overlay ────────────────────────────────────────────────────── */
+body.drag-over.drag-image::after { content: "Drop to insert image"; }
 body.drag-over::after {
   content: "Drop to open";
   position: fixed;

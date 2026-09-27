@@ -25,3 +25,5 @@ tauri-plugin-dialog = "2"
 notify = { version = "8", features = ["macos_fsevent"] }
 tauri-plugin-cli = "2"
 tauri-plugin-shell = "2"
+ureq = "3"
+sha2 = "0.10"
