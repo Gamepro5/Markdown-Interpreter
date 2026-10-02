@@ -71,6 +71,8 @@ const editorEl       = document.getElementById('editor');
 const editBtn        = document.getElementById('edit-toggle');
 const saveBtn        = document.getElementById('save-btn');
 const openBtn        = document.getElementById('open-btn');
+const outlineEl      = document.getElementById('outline');
+const outlineBtn     = document.getElementById('outline-toggle');
 const resizeHandle   = document.getElementById('resize-handle');
 const contentWrapper = document.getElementById('content-wrapper');
 
@@ -152,6 +154,7 @@ function resolveAssetPath(href) {
 function renderMarkdown(md) {
   for (const key in headingCount) delete headingCount[key];
   previewEl.innerHTML = marked.parse(md);
+  updateOutline();
 }
 
 function showView(view) {
@@ -180,12 +183,26 @@ async function openFile(path) {
     await invoke('watch_current_file');
   } catch (e) {
     console.error('Failed to open file:', e);
+    if (!appEl.classList.contains('hidden')) {
+      showToast(`Couldn't open ${path}: ${e}`);
+      return;
+    }
     loadingMsg.textContent = `Error: ${e}`;
     loadingMsg.classList.add('error');
     const spinner = loadingEl.querySelector('.spinner');
     if (spinner) spinner.style.display = 'none';
     showView('loading');
   }
+}
+
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+
+function showToast(message) {
+  toastEl.textContent = message;
+  toastEl.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.add('hidden'), 5000);
 }
 
 async function openFileDialog() {
@@ -282,10 +299,58 @@ previewEl.addEventListener('click', (e) => {
   if (href.startsWith('#')) {
     const target = document.getElementById(href.slice(1));
     if (target) target.scrollIntoView({ behavior: 'smooth' });
+  } else if (isLocalLink(href)) {
+    openLocalLink(href);
   } else {
     shellOpen(href);
   }
 });
+
+// A link with no URL scheme (a drive letter doesn't count) points at a file.
+function isLocalLink(href) {
+  if (/^[a-z]:[\\/]/i.test(href)) return true;
+  return !/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith('//');
+}
+
+function resolveLocalPath(href) {
+  let path = href.replace(/^file:\/\//i, '').replace(/^\/([a-z]:)/i, '$1');
+  const hashAt = path.search(/[#?]/);
+  if (hashAt >= 0) path = path.slice(0, hashAt);
+  try { path = decodeURI(path); } catch (_) { /* leave it as written */ }
+
+  const isAbsolute = /^[a-z]:[\\/]/i.test(path) || path.startsWith('/') || path.startsWith('\\\\');
+  if (!isAbsolute) {
+    if (!currentFileDir) return null;
+    path = currentFileDir + '/' + path;
+  }
+
+  // Collapse `.` and `..` segments, keeping any drive/UNC/root prefix intact.
+  const sep = path.includes('\\') ? '\\' : '/';
+  const parts = path.split(/[\\/]/);
+  const out = [];
+  for (const part of parts) {
+    if (part === '..' && out.length > 1) out.pop();
+    else if (part !== '.' && (part !== '' || out.length === 0 || out.length === 1 && out[0] === '')) out.push(part);
+  }
+  return out.join(sep);
+}
+
+async function openLocalLink(href) {
+  const path = resolveLocalPath(href);
+  if (!path) return;
+  if (/\.(md|markdown|mdx|txt)$/i.test(path)) {
+    // The current window is left alone, so unsaved edits here are safe.
+    invoke('open_in_new_window', { path }).catch((e) => {
+      console.error('Failed to open link:', e);
+      showToast(`Couldn't open ${path}: ${e}`);
+    });
+  } else {
+    shellOpen(path).catch((e) => {
+      console.error('Failed to open link:', e);
+      showToast(`Couldn't open ${path}: ${e}`);
+    });
+  }
+}
 
 // ── Button handlers ──────────────────────────────────────────────────────────
 
@@ -305,9 +370,148 @@ function zoomIn() { zoomLevel = Math.min(ZOOM_MAX, zoomLevel + ZOOM_STEP); apply
 function zoomOut() { zoomLevel = Math.max(ZOOM_MIN, zoomLevel - ZOOM_STEP); applyZoom(); }
 function zoomReset() { zoomLevel = 1.0; applyZoom(); }
 
+// ── Heading navigation ───────────────────────────────────────────────────────
+
+// The outline sidebar lists every heading; clicking one scrolls the preview to
+// it and, in edit mode, moves the editor's caret to it as well.
+
+// ATX headings outside fenced code, as { level, pos } with pos the line start.
+function findHeadings(text) {
+  const headings = [];
+  let fence = null;
+  let pos = 0;
+  for (const line of text.split('\n')) {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+    } else if (f) {
+      fence = f[1];
+    } else {
+      const h = /^ {0,3}(#{1,6})(?:[ \t]|$)/.exec(line);
+      if (h) headings.push({ level: h[1].length, pos });
+    }
+    pos += line.length + 1;
+  }
+  return headings;
+}
+
+// Pixel offset of a character position inside the textarea, measured on a
+// hidden copy because textareas cannot report where wrapped text ends up.
+function editorOffsetTop(pos) {
+  const cs = getComputedStyle(editorEl);
+  const mirror = document.createElement('div');
+  for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
+                   'tabSize', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']) {
+    mirror.style[p] = cs[p];
+  }
+  mirror.style.cssText += ';position:absolute;visibility:hidden;white-space:pre-wrap;' +
+    'overflow-wrap:break-word;box-sizing:border-box;width:' + editorEl.clientWidth + 'px';
+  mirror.textContent = editorEl.value.slice(0, pos);
+  const marker = document.createElement('span');
+  marker.textContent = '​';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
+}
+
+const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6';
+const OUTLINE_KEY = 'outline-open';
+
+let outlineOpen = false;
+try { outlineOpen = localStorage.getItem(OUTLINE_KEY) === '1'; } catch (_) { /* no storage */ }
+
+// Rebuild the list from the rendered preview; runs after every render.
+function updateOutline() {
+  const els = [...previewEl.querySelectorAll(HEADING_SELECTOR)];
+  const scroll = outlineEl.scrollTop; // typing re-renders; don't snap the list back to the top
+  outlineEl.replaceChildren();
+  if (!els.length) {
+    const empty = document.createElement('div');
+    empty.className = 'outline-empty';
+    empty.textContent = 'No headings';
+    outlineEl.appendChild(empty);
+    return;
+  }
+  // Indent relative to the shallowest heading, so a file that starts at ## is flush left.
+  const top = Math.min(...els.map((el) => +el.tagName[1]));
+  els.forEach((el, i) => {
+    const item = document.createElement('button');
+    item.className = 'outline-item';
+    item.style.setProperty('--depth', +el.tagName[1] - top);
+    item.textContent = el.textContent;
+    item.title = el.textContent;
+    item.dataset.index = i;
+    outlineEl.appendChild(item);
+  });
+  outlineEl.scrollTop = scroll;
+  highlightCurrentHeading();
+}
+
+function goToHeading(index) {
+  const els = previewEl.querySelectorAll(HEADING_SELECTOR);
+  if (!els[index]) return;
+  els[index].scrollIntoView({ block: 'start' });
+
+  if (isEditing) {
+    // The editor's headings line up with the preview's unless the markdown holds
+    // some the line scanner can't see (inside a blockquote, say).
+    const headings = findHeadings(editorEl.value);
+    if (headings.length === els.length) {
+      const pos = headings[index].pos;
+      editorEl.setSelectionRange(pos, pos);
+      editorEl.scrollTop = Math.max(0, editorOffsetTop(pos) - 16);
+      editorEl.focus();
+    }
+  }
+}
+
+// Mark the heading the preview is currently scrolled to.
+function highlightCurrentHeading() {
+  if (!outlineOpen) return;
+  const els = previewEl.querySelectorAll(HEADING_SELECTOR);
+  const top = previewEl.getBoundingClientRect().top;
+  let current = 0;
+  els.forEach((el, i) => { if (el.getBoundingClientRect().top - top <= 40) current = i; });
+  // Scrolled to the very bottom: the last heading may never reach the top.
+  if (previewEl.scrollTop + previewEl.clientHeight >= previewEl.scrollHeight - 2) current = els.length - 1;
+  outlineEl.querySelectorAll('.outline-item').forEach((item, i) => {
+    const on = i === current;
+    item.classList.toggle('current', on);
+    if (on) item.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function setOutline(open) {
+  outlineOpen = open;
+  outlineEl.classList.toggle('hidden', !open);
+  outlineBtn.classList.toggle('active', open);
+  try { localStorage.setItem(OUTLINE_KEY, open ? '1' : '0'); } catch (_) { /* no storage */ }
+  if (open) highlightCurrentHeading();
+}
+
+outlineEl.addEventListener('click', (e) => {
+  const item = e.target.closest('.outline-item');
+  if (item) goToHeading(+item.dataset.index);
+});
+outlineBtn.addEventListener('click', () => setOutline(!outlineOpen));
+
+let outlineScrollQueued = false;
+previewEl.addEventListener('scroll', () => {
+  if (outlineScrollQueued) return;
+  outlineScrollQueued = true;
+  requestAnimationFrame(() => { outlineScrollQueued = false; highlightCurrentHeading(); });
+});
+
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 
 document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+    e.preventDefault();
+    setOutline(!outlineOpen);
+    return;
+  }
   // Close overlays on Escape
   if (e.key === 'Escape') {
     if (!settingsOverlay.classList.contains('hidden')) { closeSettings(); return; }
@@ -389,6 +593,7 @@ function showHotkeys() {
       <tr><td>Open file</td><td>Ctrl+O</td></tr>
       <tr><td>Save file</td><td>Ctrl+S</td></tr>
       <tr><td>Toggle edit mode</td><td>Ctrl+E</td></tr>
+      <tr><td>Toggle outline</td><td>Ctrl+Shift+O</td></tr>
       <tr><td>Settings</td><td>Ctrl+,</td></tr>
       <tr><td>Zoom in</td><td>Ctrl+= / Ctrl+Scroll up</td></tr>
       <tr><td>Zoom out</td><td>Ctrl+- / Ctrl+Scroll down</td></tr>
@@ -650,6 +855,7 @@ getCurrentWindow().onCloseRequested(async (event) => {
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 contentWrapper.classList.add('preview-only');
+setOutline(outlineOpen);
 
 (async () => {
   // Load settings first

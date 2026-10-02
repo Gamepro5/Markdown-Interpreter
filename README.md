@@ -133,6 +133,7 @@ WebKitGTK's DMABUF renderer crashes on many Wayland compositors with `Error 71 (
 | Ctrl+O | Open file |
 | Ctrl+S | Save |
 | Ctrl+E | Toggle edit mode |
+| Ctrl+Shift+O | Toggle the outline sidebar |
 | Ctrl+, | Settings |
 | Ctrl+= / Ctrl+- | Zoom in / out |
 | Ctrl+0 | Reset zoom |

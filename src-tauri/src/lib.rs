@@ -127,6 +127,22 @@ fn open_file(path: String, state: State<AppState>, app: AppHandle) -> Result<Fil
     })
 }
 
+/// Open a file in a second, independent copy of the app, leaving this window
+/// as it is. Each window owns its own current file and watcher, so a separate
+/// process is simpler than sharing that state between windows.
+#[tauri::command]
+fn open_in_new_window(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("file not found: {}", path));
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_cli_file(state: State<AppState>) -> Option<String> {
     state.cli_file.lock().unwrap().take()
@@ -311,6 +327,7 @@ pub fn run() {
             read_file,
             save_file,
             open_file,
+            open_in_new_window,
             watch_current_file,
             get_cli_file,
             get_settings,

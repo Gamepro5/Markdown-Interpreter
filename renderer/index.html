@@ -32,11 +32,13 @@
     <div id="toolbar">
       <span id="filename"></span>
       <div id="toolbar-actions">
+        <button id="outline-toggle" title="Toggle outline (Ctrl+Shift+O)">Outline</button>
         <button id="edit-toggle" title="Toggle edit mode (Ctrl+E)">Edit</button>
         <button id="save-btn" class="hidden" title="Save (Ctrl+S)">Save</button>
       </div>
     </div>
     <div id="content-wrapper">
+      <nav id="outline" class="hidden" aria-label="Document outline"></nav>
       <textarea id="editor" class="hidden" spellcheck="false"></textarea>
       <div id="resize-handle" class="hidden"></div>
       <div id="preview" class="markdown-body"></div>
@@ -122,6 +124,8 @@
     <span id="update-text"></span>
     <span id="update-actions"></span>
   </div>
+
+  <div id="toast" class="hidden"></div>
 
   <script src="bundle.js"></script>
 </body>

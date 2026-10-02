@@ -132,6 +132,39 @@ html, body {
   overflow: hidden;
 }
 
+/* Outline sidebar */
+#outline {
+  width: 240px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 12px 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.35;
+}
+#outline .outline-empty {
+  padding: 8px 16px;
+  color: var(--text-muted);
+}
+#outline .outline-item {
+  display: block;
+  width: 100%;
+  padding: 4px 16px 4px calc(16px + var(--depth, 0) * 14px);
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-left: 2px solid transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#outline .outline-item:hover { color: var(--text); background: var(--bg-inset); }
+#outline .outline-item.current { color: var(--accent); border-left-color: var(--accent); }
+
 /* Editor */
 #editor {
   width: 50%;
@@ -546,6 +579,23 @@ body.full-width #content-wrapper.preview-only #preview {
 #update-actions a { color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: none; }
 #update-actions a:hover { text-decoration: underline; }
 #update-actions .btn-primary { padding: 4px 14px; }
+
+#toast {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-all;
+  z-index: 200;
+}
+#toast.hidden { display: none; }
 
 /* ── Drag-over overlay ────────────────────────────────────────────────────── */
 body.drag-over.drag-image::after { content: "Drop to insert image"; }
